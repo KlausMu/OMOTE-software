@@ -246,7 +246,6 @@ enum Wakeup_reasons{WAKEUP_BY_RESET, WAKEUP_BY_IMU, WAKEUP_BY_KEYPAD};
 
 // LVGL declarations ------------------------------------------------------------------------------
 // we either show the checksTable with the test results, or an empty screen where all touches are shown as red dots
-static lv_disp_draw_buf_t draw_buf;
 lv_obj_t* checksTable;
 lv_obj_t* touchScreen;
 
@@ -287,7 +286,7 @@ static void show_touches_cb(lv_event_t * e) {
     if (!show_touches) {
       // create new screen, only showing touches
       touchScreen = lv_obj_create(NULL);
-      lv_scr_load(touchScreen);
+      lv_screen_load(touchScreen);
 
       show_touches = true;
     }
@@ -295,26 +294,26 @@ static void show_touches_cb(lv_event_t * e) {
 }
 
 // Display flushing
-void my_disp_flush( lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p ){
-  uint32_t w = ( area->x2 - area->x1 + 1 );
-  uint32_t h = ( area->y2 - area->y1 + 1 );
+static void my_disp_flush( lv_display_t *disp, const lv_area_t *area, uint8_t *px_map ) {
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
 
   tft.startWrite();
-  tft.setAddrWindow( area->x1, area->y1, w, h );
+  tft.setAddrWindow(area->x1, area->y1, w, h);
   // single buffer bufA
-  // tft.pushPixels((uint16_t*)&color_p->full, w * h, true);
+  // tft.pushColors((uint16_t *)px_map, w * h, true);
   // double buffer bufA and bufB
-  tft.pushPixelsDMA( ( uint16_t * )&color_p->full, w * h);
+  tft.pushPixelsDMA((uint16_t*)px_map, w * h);
   tft.endWrite();
 
-  lv_disp_flush_ready( disp );
+  lv_display_flush_ready(disp);
 }
 
 // Read the touchpad
-void my_touchpad_read(lv_indev_drv_t * indev_driver, lv_indev_data_t * data) {
+static void my_touchpad_read(lv_indev_t *indev_driver, lv_indev_data_t *data) {
     uint16_t x, y;
     if (tft.getTouch(&x, &y)) {
-        data->state = LV_INDEV_STATE_PR;
+        data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = x;
         data->point.y = y;
 
@@ -331,7 +330,7 @@ void my_touchpad_read(lv_indev_drv_t * indev_driver, lv_indev_data_t * data) {
         lv_table_set_cell_value_fmt(checksTable, 8, 1, "%" LV_PRIu32, count_touches);
 
     } else {
-        data->state = LV_INDEV_STATE_REL;
+        data->state = LV_INDEV_STATE_RELEASED;
     }
 }
 
@@ -522,6 +521,10 @@ void WiFiEvent(WiFiEvent_t event){
 }
 #endif
 
+static uint32_t my_tick_get_cb(void) {
+  return millis();
+}
+
 // Setup ----------------------------------------------------------------------------------------------------------------------------------
 
 int fuelGaugeInitSuccessful = false;
@@ -656,38 +659,40 @@ void setup() {
   tft.setSwapBytes(true);
   
   // setup LVGL -----------------------------------------------------------------------------------
-  // Double buffer
-  lv_color_t * bufA = (lv_color_t *) malloc(sizeof(lv_color_t) * SCR_WIDTH * SCR_HEIGHT / 10);
-  lv_color_t * bufB = (lv_color_t *) malloc(sizeof(lv_color_t) * SCR_WIDTH * SCR_HEIGHT / 10);
-  lv_disp_draw_buf_init( &draw_buf, bufA, bufB, SCR_WIDTH * SCR_HEIGHT / 10 );
+  // new in lvgl 9
+  lv_tick_set_cb(my_tick_get_cb);
+  
+  /*LVGL draw into this buffer, 1/10 screen size usually works well. The size is in bytes*/
+  #define DRAW_BUF_SIZE (SCR_WIDTH * SCR_HEIGHT / 10 * (LV_COLOR_DEPTH / 8))
 
-  // Initialize the display driver
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init( &disp_drv );
-  disp_drv.hor_res = SCR_WIDTH;
-  disp_drv.ver_res = SCR_HEIGHT;
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register( &disp_drv );
+  // https://github.com/lvgl/lvgl/blob/release/v9.0/docs/CHANGELOG.rst#display-api
+  // https://docs.lvgl.io/master/get-started/quick-overview.html#add-lvgl-into-your-project
+  lv_display_t *disp = lv_display_create(SCR_WIDTH, SCR_HEIGHT);
+  lv_display_set_flush_cb(disp, my_disp_flush);
+
+  // https://github.com/lvgl/lvgl/blob/release/v9.0/docs/CHANGELOG.rst#migration-guide
+  // lv_display_set_buffers(display, buf1, buf2, buf_size_byte, mode) is more or less the equivalent of lv_disp_draw_buf_init(&draw_buf_dsc, buf1, buf2, buf_size_px) from v8, however in v9 the buffer size is set in bytes.
+  uint8_t *bufA = (uint8_t *) malloc(DRAW_BUF_SIZE);
+  uint8_t *bufB = (uint8_t *) malloc(DRAW_BUF_SIZE);
+  lv_display_set_buffers(disp, bufA, bufB, DRAW_BUF_SIZE, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
   // Initialize the touchscreen driver
-  static lv_indev_drv_t indev_drv;
-  lv_indev_drv_init( &indev_drv );
-  indev_drv.type = LV_INDEV_TYPE_POINTER;
-  indev_drv.read_cb = my_touchpad_read;
-  lv_indev_drv_register( &indev_drv );
+  // https://github.com/lvgl/lvgl/blob/release/v9.0/docs/CHANGELOG.rst#indev-api
+  static lv_indev_t * indev = lv_indev_create();
+  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(indev, my_touchpad_read);
 
   // create GUI content ---------------------------------------------------------------------------
   // Set the background color
-  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), LV_PART_MAIN);
 
   // we either show the checksTable with the test results, or an empty screen where all touches are shown as red dots
 
   // Table showing the check results
-  checksTable = lv_table_create(lv_scr_act());
-  lv_table_set_col_width(checksTable, 0, 157);
-  lv_table_set_col_width(checksTable, 1, 80);
-  lv_table_set_col_cnt(checksTable, 2);
+  checksTable = lv_table_create(lv_screen_active());
+  lv_table_set_column_width(checksTable, 0, 157);
+  lv_table_set_column_width(checksTable, 1, 80);
+  lv_table_set_column_count(checksTable, 2);
   lv_obj_remove_style(checksTable, NULL, LV_PART_ITEMS | LV_STATE_PRESSED);
   lv_obj_set_style_pad_top(checksTable, 5, LV_PART_ITEMS);
   lv_obj_set_style_pad_bottom(checksTable, 5, LV_PART_ITEMS);
@@ -715,7 +720,7 @@ void setup() {
   lv_table_set_cell_value_fmt(checksTable, 9, 1, "%.1f", 0.001f * (float)standbyTimer);
 
   // restart button
-  lv_obj_t * btnRestart = lv_btn_create(lv_scr_act());
+  lv_obj_t * btnRestart = lv_button_create(lv_screen_active());
   lv_obj_add_event_cb(btnRestart, esp32_restart_cb, LV_EVENT_ALL, NULL);
   lv_obj_align(btnRestart, LV_ALIGN_BOTTOM_MID, -74, -15);
   lv_obj_t * labelRestart = lv_label_create(btnRestart);
@@ -723,7 +728,7 @@ void setup() {
   lv_obj_center(labelRestart);
 
   // show touch hits
-  lv_obj_t * btnShowTouches = lv_btn_create(lv_scr_act());
+  lv_obj_t * btnShowTouches = lv_button_create(lv_screen_active());
   lv_obj_add_event_cb(btnShowTouches, show_touches_cb, LV_EVENT_ALL, NULL);
   lv_obj_align(btnShowTouches, LV_ALIGN_BOTTOM_MID, 43, -15);
   lv_obj_t * labelShowTouches = lv_label_create(btnShowTouches);

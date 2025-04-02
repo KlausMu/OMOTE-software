@@ -10,7 +10,9 @@
 #include "scenes/scene__default.h"
 
 lv_color_t color_primary = lv_color_hex(0x303030); // gray
-lv_obj_t* MemoryUsageLabel = NULL;
+lv_span_t* MemoryUsageSpanHeap = NULL;
+lv_span_t* MemoryUsageSpanSeparator = NULL;
+lv_span_t* MemoryUsageSpanLVGLmemory = NULL;
 lv_obj_t* WifiLabel = NULL;
 lv_obj_t* BluetoothLabel = NULL;
 lv_obj_t* BattPercentageLabel = NULL;
@@ -42,7 +44,7 @@ void guis_doTabCreationAfterSliding(int newTabID);
 
 // callback when pageIndicator prev or next was clicked
 void pageIndicator_navigate_event_cb(lv_event_t* e) {
-  lv_obj_t* target = lv_event_get_target(e);
+  lv_obj_t* target = (lv_obj_t*)lv_event_get_target(e);
   
   int user_data = (intptr_t)(target->user_data);
   if (user_data == 0) {
@@ -60,8 +62,8 @@ void sceneLabel_or_pageIndicator_event_cb(lv_event_t* e) {
 
 // callback for swipe down event to navigate to the scene selection page
 void screen_gesture_event_cb(lv_event_t* e) {
-  lv_obj_t* screen = lv_event_get_current_target(e);
-  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+  lv_obj_t* screen = (lv_obj_t*)lv_event_get_current_target(e);
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
   if (dir == LV_DIR_BOTTOM) {
     omote_log_d("- Scene selection: swipe down received for navigating to scene selection page\r\n");
     executeCommand(SCENE_SELECTION);
@@ -77,7 +79,7 @@ void tabview_content_is_scrolling_event_cb(lv_event_t* e){
   //           screenwidth    indicator    ??    2 small hidden buttons  ??
   int offset = SCR_WIDTH / 2  - 150 / 2    - 8 - 2*50 / 2                -4;
   // get the object to which the event is sent
-  lv_obj_t* tabviewContent = lv_event_get_target(e);
+  lv_obj_t* tabviewContent = (lv_obj_t*)lv_event_get_target(e);
   
   // Get the x coordinate of object and scroll panel accordingly
   int16_t tabviewX = lv_obj_get_scroll_x(tabviewContent);
@@ -113,18 +115,18 @@ static void tabview_animation_ready_cb(lv_anim_t* a) {
 void tabview_tab_changed_event_cb(lv_event_t* e) {
   if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
     
-    int newTabID = lv_tabview_get_tab_act((lv_obj_t*)lv_event_get_target(e));
+    int newTabID = lv_tabview_get_tab_active((lv_obj_t*)lv_event_get_target(e));
 
     // Wait until the animation ended, then call "guis_doTabCreationAfterSliding(newTabID);"
     // https://forum.lvgl.io/t/delete-a-tab-after-the-tabview-scroll-animation-is-complete/3155/4
-    lv_obj_t* myTabview = lv_event_get_target(e);
+    lv_obj_t* myTabview = (lv_obj_t*)lv_event_get_target(e);
     lv_obj_t* tabContainer = lv_tabview_get_content(myTabview);
     lv_anim_t* anim = lv_anim_get(tabContainer, NULL);
     if(anim) {
       // Swipe is not yet complete. User released the touch screen, an animation will bring it to the end.
       // That's the normal (and only?) case for the tft touchscreen
       newTabID_forLateTabCreation = newTabID;
-      lv_anim_set_ready_cb(anim, tabview_animation_ready_cb);
+      lv_anim_set_completed_cb(anim, tabview_animation_ready_cb);
     } else {
       // Swipe is complete, no additional animation is needed. Most likely only possible in simulator
       omote_log_d("Change of tab detected, without animation at the end. Will directly do my job after sliding.\r\n");
@@ -159,7 +161,7 @@ void init_gui(void) {
     #endif
   }
   // Set the background color -------------------------------------------------------------------------------
-  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), LV_PART_MAIN);
   // set default height and position of main widgets
   setMainWidgetsHeightAndPosition();
   // On startup, set current GUIname and GUIlist according to last state before going to sleep
@@ -170,7 +172,7 @@ void init_gui(void) {
   init_gui_status_bar();
 
   // register callback for swipe down event to navigate to the scene selection page
-  lv_obj_add_event_cb(lv_scr_act(), screen_gesture_event_cb, LV_EVENT_GESTURE, NULL);
+  lv_obj_add_event_cb(lv_screen_active(), screen_gesture_event_cb, LV_EVENT_GESTURE, NULL);
 
 }
 
@@ -210,7 +212,7 @@ void showMemoryUsageBar(bool showBar) {
   return;
 
   if (showBar) {
-    // lv_obj_clear_flag(memoryUsageBar, LV_OBJ_FLAG_HIDDEN);
+    // lv_obj_remove_flag(memoryUsageBar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(memoryUsageBar, SCR_WIDTH, memoryUsageBarHeight);
     lv_obj_align(memoryUsageBar, LV_ALIGN_TOP_MID, 0, memoryUsageBarTop);
     lv_obj_set_size(statusbar, SCR_WIDTH, statusbarHeight);
@@ -225,7 +227,7 @@ void showMemoryUsageBar(bool showBar) {
 
 void init_gui_memoryUsage_bar() {
   // Create a memory status text bar at the top -------------------------------------------------------------
-  memoryUsageBar = lv_btn_create(lv_scr_act());
+  memoryUsageBar = lv_button_create(lv_screen_active());
   lv_obj_set_size(memoryUsageBar, SCR_WIDTH, memoryUsageBarHeight);
   lv_obj_set_style_shadow_width(memoryUsageBar, 0, LV_PART_MAIN);
   lv_obj_set_style_bg_color(memoryUsageBar, lv_color_black(), LV_PART_MAIN);
@@ -236,17 +238,21 @@ void init_gui_memoryUsage_bar() {
   lv_obj_set_style_pad_all(memoryUsageBar, 0, LV_PART_MAIN);
   lv_obj_align(memoryUsageBar, LV_ALIGN_TOP_MID, 0, memoryUsageBarTop);
 
-  MemoryUsageLabel = lv_label_create(memoryUsageBar);
-  lv_label_set_text(MemoryUsageLabel, "");
-  lv_obj_align(MemoryUsageLabel, LV_ALIGN_TOP_LEFT, 0 +2, labelsPositionTop +2);
-  lv_obj_set_style_text_font(MemoryUsageLabel, &lv_font_montserrat_10, LV_PART_MAIN);
-  lv_label_set_recolor(MemoryUsageLabel, true);
+  lv_obj_t * memoryUsageSpangroup = lv_spangroup_create(memoryUsageBar);
+  lv_obj_align(memoryUsageSpangroup, LV_ALIGN_TOP_LEFT, 0, labelsPositionTop);
+  lv_obj_set_style_text_font(memoryUsageSpangroup, &lv_font_montserrat_12, LV_PART_MAIN);
+  // label for heap usage
+  MemoryUsageSpanHeap = lv_spangroup_new_span(memoryUsageSpangroup);
+  // separator
+  MemoryUsageSpanSeparator = lv_spangroup_new_span(memoryUsageSpangroup);
+  // label for lvgl memory usage
+  MemoryUsageSpanLVGLmemory = lv_spangroup_new_span(memoryUsageSpangroup);
 }
 
 void init_gui_status_bar() {
   // Create a status bar at the top -------------------------------------------------------------------------
-  statusbar = lv_btn_create(lv_scr_act());
-  lv_obj_clear_flag(statusbar, LV_OBJ_FLAG_CLICKABLE);
+  statusbar = lv_button_create(lv_screen_active());
+  lv_obj_remove_flag(statusbar, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_size(statusbar, SCR_WIDTH, statusbarHeight);
   lv_obj_set_style_shadow_width(statusbar, 0, LV_PART_MAIN);
   lv_obj_set_style_bg_color(statusbar, lv_color_black(), LV_PART_MAIN);
@@ -352,19 +358,19 @@ void guis_doTabCreationForNavigateToLastActiveGUIofPreviousGUIlist() {
 void setActiveTab(uint32_t index, lv_anim_enable_t anim_en, bool send_tab_changed_event) {
   // unsigned long startTime = millis();
   if (anim_en == LV_ANIM_ON) {
-    lv_tabview_set_act(tabview, index, LV_ANIM_ON);
+    lv_tabview_set_active(tabview, index, LV_ANIM_ON);
     // startTime = millis();
     // while (millis() - startTime < 1000) {
     //   lv_timer_handler();
     // }
   } else {
-    lv_tabview_set_act(tabview, index, LV_ANIM_OFF);
+    lv_tabview_set_active(tabview, index, LV_ANIM_OFF);
     // lv_timer_handler();
     // log_memory();
   }
 
   if (send_tab_changed_event) {
-    lv_event_send(tabview, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_send_event(tabview, LV_EVENT_VALUE_CHANGED, NULL);
   }
 }
 
